@@ -104,10 +104,72 @@ func Worker(mapf func(string, string) []KeyValue,
 			finishedReply := ExampleReply{}
 			call("Master.ReceiveFinishedMap", &finishedArgs, &finishedReply)
 		} else if reply.Tasktype == 1 {
-			
+			// collect key-value from mr-X-Y
+			intermediate := []KeyValue{}
+			for i := 0; i < reply.NMap; i++ {
+				iname := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(reply.ReduceTaskNumber)
+				// open && read the file
+				file, err := os.Open(iname)
+				if err != nil {
+					log.Fatalf("cannot open %v", file)
+				}
+				dec := json.NewDecoder(file)
+				for {
+					var kv KeyValue
+					if err := dec.Decode(&kv); err != nil {
+						break
+					}
+					intermediate = append(intermediate, kv)
+				}
+				file.Close()
+			}
+			// sort by key
+			sort.Sort(ByKey(intermediate))
+
+			// output file
+			oname := "mr-out-" + strconv.Itoa(reply.ReduceTaskNumber)
+			ofile, _ := ioutil.TempFile("", oname+"*")
+
+			//
+			// call Reduce on each distinct key in intermediate[],
+			// and print the result to mr-out-0.
+			//
+			i := 0
+			for i < len(intermediate) {
+				j := i + 1
+				for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+					j++
+				}
+				values := []string{}
+				for k := i; k < j; k++ {
+					values = append(values, intermediate[k].Value)
+				}
+				output := reducef(intermediate[i].Key, values)
+
+				// this is the correct format for each line of Reduce output.
+				fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+				i = j
+			}
+			os.Rename(ofile.Name(), oname)
+			ofile.Close()
+
+			for i := 0; i < reply.NMap; i++ {
+				iname := "mr-" + strconv.Itoa(i) + "-" + strconv.Itoa(reply.ReduceTaskNumber)
+				err := os.Remove(iname)
+				if err != nil {
+					log.Fatalf("cannot open delete" + iname)
+				}
+			}
+
+			// send the finish message to master
+			finishedArgs := WorkerArgs{-1, reply.ReduceTaskNumber}
+			finishedReply := ExampleReply{}
+			call("Master.ReceiveFinishedReduce", &finishedArgs, &finishedReply)
 		}
-
-
+		time.Sleep(time.Second)
+	}
+	return
 }
 
 //
